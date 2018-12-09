@@ -1,5 +1,5 @@
 require 'set'
-require 'pp'
+
 # Part 1
 puts "Part 1"
 
@@ -42,8 +42,7 @@ def topological_sort(out_edges)
   ordering
 end
 
-output = topological_sort(nodes).join
-puts output
+puts topological_sort(nodes).join
 
 # Part 2
 puts "Part 2"
@@ -64,23 +63,19 @@ def elf_time(out_edges, extra_seconds = 60, worker_limit = 5)
   seconds = 0
 
   until finished == ALL_LETTERS.length
+    ready.sort!.reverse!
+
     until ready.empty? || workers.length == worker_limit
       ready_node = ready.pop
       workers << [extra_seconds + ready_node.ord - ('A'.ord - 1), ready_node]
     end
-
-    p [workers, ready.count]
 
     seconds_passed = workers.min_by(&:first).first
     seconds += seconds_passed
     workers.map! { |seconds, char| [seconds - seconds_passed, char] }
     done_workers, workers = workers.partition { |seconds, node| seconds == 0 }
 
-    puts "Done workers: #{done_workers}"
-    puts "Workers: #{workers}"
-
     done_workers.map(&:last).each do |next_val|
-      p "Processing #{next_val}"
       finished += 1
 
       out_edges[next_val].each do |to|
@@ -90,8 +85,6 @@ def elf_time(out_edges, extra_seconds = 60, worker_limit = 5)
     end
   end
 
-  require 'pry'
-  binding.pry
   seconds
 end
 
