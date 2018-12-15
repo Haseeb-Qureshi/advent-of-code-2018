@@ -1,5 +1,5 @@
 # Part 1
-INPUT = File.readlines(__dir__ + "/day01_input.txt").map(&:chomp).map(&:to_i)
+INPUT = File.readlines("input01.txt").map(&:chomp).map(&:to_i)
 puts "Part 1: #{INPUT.reduce(:+)}"
 
 # Part 2
