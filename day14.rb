@@ -51,4 +51,4 @@ loop do
   elf2 = (elf2 + recipes[elf2] + 1) % recipes.length
 end
 
-puts recipes.length - 7
+puts recipes.length - 5
