@@ -6,12 +6,17 @@ WALL = '#'.freeze
 EMPTY = '.'.freeze
 
 class GameOverError < StandardError; end
+class ElfDeathError < StandardError; end
 
 class Game
-  attr_reader :turns
-  def initialize(input)
-    @grid = Grid.new(input, self)
+  attr_reader :turns, :elf_power
+  def initialize(input, print: true, part2: false, elf_power: 3)
+    @input = input
+    @grid = Grid.new(input, self, part2)
     @turns = 0
+    @print = print
+    @part2 = part2
+    @elf_power = elf_power
   end
 
   def play
@@ -27,6 +32,7 @@ class Game
 
     puts "And done!!"
     puts calc_points
+    puts [@grid.units.map(&:hp).sum, @turns]
   end
 
   def calc_points
@@ -34,15 +40,12 @@ class Game
   end
 
   def take_turn
-    time = Benchmark.realtime do
-      @grid.move_each_unit!
-    end
-    puts time
+    @grid.move_each_unit!
     print_game
   end
 
   def print_game
-    puts to_s
+    puts to_s if @print
   end
 
   def to_s
@@ -71,11 +74,12 @@ end
 class Grid
   attr_reader :grid, :units, :goblin_count, :elf_count, :game
 
-  def initialize(input, game)
+  def initialize(input, game, part2)
     @game = game
     @units = []
     @goblin_count = 0
     @elf_count = 0
+    @part2 = part2
     @grid = input.lines.map(&:chomp).reject(&:empty?).map.with_index do |line, i|
       line.chars.map.with_index do |char, j|
         case char
@@ -113,55 +117,38 @@ class Grid
 
   def choose_location(unit)
     # BFS to find the closest opponent, then find every path there, taking the minimum lexicographical next step in that direction
-    origin = [unit.i, unit.j]
+    origin = unit.coords
     opponents = units.select { |u| u.class == unit.enemy }.reject(&:dead?)
-    target_squares = opponents.flat_map { |u| reachable_empty_squares(u.coords) }
-                              .sort
+    target_squares = Set.new(opponents.flat_map { |u| reachable_empty_squares(u.coords) })
 
     return origin if target_squares.empty?
 
-    seen = Set.new
-    queue = [origin]
+    seen = {}
+    queue = [[origin, nil]]
+    enqueued = Set.new([origin])
     goal = nil
     while queue.any?
-      square = queue.shift
+      square, predecessor = queue.shift
 
-      seen << square
+      seen[square] = predecessor
+      if target_squares.include?(square)
+        goal = square
+        break
+      end
 
-      next_squares = reachable_empty_squares(square).reject { |sq| seen.include?(sq) }
-                                                    .sort
+      next_squares = reachable_empty_squares(square).reject do |sq|
+        seen.key?(sq) || enqueued.include?(sq)
+      end.sort
 
-      goal = next_squares.find { |sq| target_squares.include?(sq) }
-      break if goal
-
-      queue.concat(next_squares)
+      queue.concat(next_squares.map { |sq| [sq, square] })
+      next_squares.each { |sq| enqueued << sq }
     end
 
     # if no path leads to any of our targets, then no-op
     return origin if goal.nil?
 
-    # great, we have our goal, now let's figure out the shortest path there
-    reachable_empty_squares(origin).min_by do |sq|
-      [distance(sq, goal), sq[0], sq[1]]
-    end
-  end
-
-  def distance(start, finish)
-    seen = Set.new
-    queue = [[start, 0]]
-    while queue.any?
-      square, dist = queue.shift
-      return dist if square == finish
-
-      seen << square
-
-      next_squares = reachable_empty_squares(square).reject { |sq| seen.include?(sq) }
-                                                    .sort
-
-      next_squares.each { |sq| queue << [sq, dist + 1] }
-    end
-
-    Float::INFINITY
+    goal = seen[goal] until reachable_empty_squares(origin).include?(goal)
+    goal
   end
 
   def move_unit!(unit, next_square)
@@ -189,6 +176,7 @@ class Grid
   end
 
   def register_death!(unit)
+    raise ElfDeathError.new if unit.is_a?(Elf) && @part2
     self[unit.i, unit.j] = EMPTY
     @units.delete(unit)
     unit.is_a?(Goblin) ? @goblin_count -= 1 : @elf_count -= 1
@@ -218,9 +206,10 @@ class Grid
 end
 
 class Unit
-  attr_accessor :i, :j, :hp
+  attr_accessor :i, :j, :hp, :grid, :game
   def initialize(grid, i, j)
     @grid = grid
+    @game = grid.game
     @i = i
     @j = j
     @hp = 200
@@ -267,7 +256,7 @@ class Elf < Unit
   end
 
   def attack_power
-    3
+    game.elf_power
   end
 
   def to_s
