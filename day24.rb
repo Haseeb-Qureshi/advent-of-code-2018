@@ -8,14 +8,6 @@ PRINT = false
 
 INPUT = File.read('input24.txt')
 
-INPUT = "Immune System:
-17 units each with 5390 hit points (weak to radiation, bludgeoning) with an attack that does 4507 fire damage at initiative 2
-989 units each with 1274 hit points (immune to fire; weak to bludgeoning, slashing) with an attack that does 25 slashing damage at initiative 3
-
-Infection:
-801 units each with 4706 hit points (weak to radiation) with an attack that does 116 bludgeoning damage at initiative 1
-4485 units each with 2961 hit points (immune to radiation; weak to fire, cold) with an attack that does 12 slashing damage at initiative 4"
-
 class UnitGroup < Struct.new(
   :type,
   :units,
@@ -27,6 +19,7 @@ class UnitGroup < Struct.new(
   :initiative,
   :num
 )
+  attr_reader :target
 
   def effective_power
     units * damage_power
@@ -46,8 +39,6 @@ class UnitGroup < Struct.new(
   end
 
   def damage_to(opponent)
-    return 0 if opponent.nil?
-
     if opponent.immunities.include?(damage_type)
       0
     elsif opponent.weaknesses.include?(damage_type)
@@ -62,17 +53,17 @@ class UnitGroup < Struct.new(
   end
 
   def select_target!(opponents)
-    # The attacking group chooses to target the group in the enemy army to which it would deal the most damage (after accounting for weaknesses and immunities, but not accounting for whether the defending group has enough units to actually receive all of that damage).
-
-    # If an attacking group is considering two defending groups to which it would deal equal damage, it chooses to target the defending group with the largest effective power; if there is still a tie, it chooses the defending group with the highest initiative. If it cannot deal any defending groups damage, it does not choose a target. Defending groups can only be chosen as a target by one attacking group.
+    return nil if opponents.empty?
 
     target = opponents.max_by do |opponent|
+      raise "WTF, opponent is dead" if opponent.dead?
+
       damage = damage_to(opponent)
       puts "#{type} group #{num} would deal defending group #{opponent.num} #{damage} damage" if PRINT
       [damage_to(opponent), opponent.effective_power, opponent.initiative]
     end
 
-    @target = damage_to(target).zero? ? nil : target
+    @target = target unless damage_to(target).zero?
   end
 
   def attack_target!
@@ -86,110 +77,163 @@ class UnitGroup < Struct.new(
   end
 end
 
-immune_str, infection_str = INPUT.split("\n\n")
 
-def process_groups(s)
-  type = s.split(':').first.to_sym
-  s.lines.drop(1).each_with_index.reduce([]) do |arr, (line, i)|
-    units = line.scan(/(\d+) units/).flatten.first.to_i
-    hp = line.scan(/(\d+) hit points/).flatten.first.to_i
+class Game
+  def initialize(boost_immune: 0)
+    @boost_immune = boost_immune
 
-    characteristics = line[/\(.+\)/]
+    immune_str, infection_str = INPUT.split("\n\n")
+    @immune_groups = process_groups(immune_str)
+    @infection_groups = process_groups(infection_str)
+    @round = 0
 
-    if characteristics
-      immunities = characteristics.scan(/immune to ([^;\)]+)/).flatten.first
-      weaknesses = characteristics.scan(/weak to ([^;\)]+)/).flatten.first
-    else
-      immunities = nil
-      weaknesses = nil
-    end
-
-    if immunities
-      immunities = immunities.split(', ').map(&:to_sym)
-    else
-      immunities = []
-    end
-
-    if weaknesses
-      weaknesses = weaknesses.split(', ').map(&:to_sym)
-    else
-      weaknesses = []
-    end
-
-    damage_power = line.scan(/attack that does (\d+)/).flatten.first.to_i
-    damage_type = line.scan(/attack that does \d+ (\w+) damage/).flatten.first.chomp.to_sym
-    initiative = line.scan(/at initiative (\d+)/).flatten.first.to_i
-    num = i + 1
-
-    arr << UnitGroup.new(
-      type,
-      units,
-      hp,
-      immunities,
-      weaknesses,
-      damage_power,
-      damage_type,
-      initiative,
-      num
-    )
-  end
-end
-
-def print_groups(round, immune_groups, infection_groups)
-  return unless PRINT
-
-  puts "-" * 12
-  puts "Round #{round}"
-  puts "-" * 12
-  puts "Immune System:"
-  immune_groups.each do |group|
-    puts "Group #{group.num} contains #{group.units} units"
+    print_groups
   end
 
-  puts "Infection:"
-  infection_groups.each do |group|
-    puts "Group #{group.num} contains #{group.units} units"
+  def play_out!
+    until @immune_groups.sum(&:units).zero? || @infection_groups.sum(&:units).zero?
+      total_units = final_score
+      fight_round!
+      break if final_score == total_units # stalemate!
+    end
   end
-end
 
-immune_groups = process_groups(immune_str)
-infection_groups = process_groups(infection_str)
+  def fight_round!
+    @round += 1
+    target_selection!
+    puts "\n" if PRINT
+    attack_targets!
+    print_groups
+  end
 
-round = 0
-print_groups(round, immune_groups, infection_groups)
+  def final_score
+    [*@immune_groups, *@infection_groups].sum(&:units)
+  end
 
-until immune_groups.empty? || infection_groups.empty?
-  round += 1
+  def winner
+    if @infection_groups.sum(&:units) > 0
+      :Infection
+    else
+      :Immune
+    end
+  end
 
-  untargeted_immunes = immune_groups.dup
-  infection_groups.sort_by { |g| [g.effective_power, g.initiative] }
-                  .reverse_each do |infection_group|
-                    target = infection_group.select_target!(untargeted_immunes)
-                    untargeted_immunes.delete(target)
+  private
+
+  def target_selection!
+    begin
+    untargeted_immunes = @immune_groups.dup
+    @infection_groups.sort_by { |g| [g.effective_power, g.initiative] }
+                     .reverse_each do |infection_group|
+                       target = infection_group.select_target!(untargeted_immunes)
+                       untargeted_immunes.delete(target)
+                     end
+
+    untargeted_infections = @infection_groups.dup
+    @immune_groups.sort_by { |g| [g.effective_power, g.initiative] }
+                  .reverse_each do |immune_group|
+                    target = immune_group.select_target!(untargeted_infections)
+                    untargeted_infections.delete(target)
                   end
+                rescue => e
+                  binding.pry
+                end
+  end
 
-  untargeted_infections = infection_groups.dup
-  immune_groups.sort_by { |g| [g.effective_power, g.initiative] }
-               .reverse_each do |immune_group|
-                 target = immune_group.select_target!(untargeted_infections)
-                 untargeted_infections.delete(target)
-               end
+  def attack_targets!
+    (@immune_groups + @infection_groups).sort_by(&:initiative).reverse_each do |group|
+      next if group.dead?
 
-  puts "\n" if PRINT
+      target = group.target
+      next if target.nil?
 
-  (immune_groups + infection_groups).sort_by(&:initiative).reverse_each do |group|
-    if group.dead?
-      immune_groups.delete(group)
-      infection_groups.delete(group)
-    else
       group.attack_target!
+      if target.dead?
+        @immune_groups.delete(target)
+        @infection_groups.delete(target)
+      end
     end
   end
 
-  print_groups(round, immune_groups, infection_groups)
+  def process_groups(s)
+    type = s.split(':').first.to_sym
+    s.lines.drop(1).each_with_index.reduce([]) do |arr, (line, i)|
+      units = line.scan(/(\d+) units/).flatten.first.to_i
+      hp = line.scan(/(\d+) hit points/).flatten.first.to_i
+
+      characteristics = line[/\(.+\)/]
+
+      if characteristics
+        immunities = characteristics.scan(/immune to ([^;\)]+)/).flatten.first
+        weaknesses = characteristics.scan(/weak to ([^;\)]+)/).flatten.first
+      else
+        immunities = nil
+        weaknesses = nil
+      end
+
+      if immunities
+        immunities = immunities.split(', ').map(&:to_sym)
+      else
+        immunities = []
+      end
+
+      if weaknesses
+        weaknesses = weaknesses.split(', ').map(&:to_sym)
+      else
+        weaknesses = []
+      end
+
+      damage_power = line.scan(/attack that does (\d+)/).flatten.first.to_i
+      damage_type = line.scan(/attack that does \d+ (\w+) damage/).flatten.first.chomp.to_sym
+      initiative = line.scan(/at initiative (\d+)/).flatten.first.to_i
+      num = i + 1
+
+      damage_power += @boost_immune unless type == :Infection
+
+      arr << UnitGroup.new(
+        type,
+        units,
+        hp,
+        immunities,
+        weaknesses,
+        damage_power,
+        damage_type,
+        initiative,
+        num
+      )
+    end
+
+  end
+
+  def print_groups
+    return unless PRINT
+
+    puts "-" * 12
+    puts "Round #{@round}"
+    puts "-" * 12
+    puts "Immune System:"
+    @immune_groups.each do |group|
+      puts "Group #{group.num} contains #{group.units} units"
+    end
+
+    puts "Infection:"
+    @infection_groups.each do |group|
+      puts "Group #{group.num} contains #{group.units} units"
+    end
+  end
 end
 
-# 17041 is too low
-# 17050 is too low
-# 17100 is too low
-puts [immune_groups.map(&:units), infection_groups.map(&:units)].flatten.sum
+g = Game.new
+g.play_out!
+puts g.final_score
+
+# Part 2
+puts "Part 2"
+
+minimal_winning_boost = (1..).find do |boost|
+  g = Game.new(boost_immune: boost)
+  g.play_out!
+  g.winner != :Infection
+end
+
+puts minimal_winning_boost
